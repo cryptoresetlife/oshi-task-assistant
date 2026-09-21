@@ -139,11 +139,23 @@ export class BrowserAdapter {
     return locator;
   }
   async postText(task) { return (await (await this.targetPost(task)).getByTestId('tweetText').innerText()).trim(); }
+  postControl(post,id) {
+    // X Articles embed a second toolbar inside the tweet. Only use the outer
+    // tweet's controls; an article/quoted-post toolbar is not the action target.
+    return post.locator(`button[data-testid="${id}"]:not([data-testid="twitterArticleReadView"] *):not([data-testid="quoteTweet"] *)`).filter({visible:true});
+  }
+  async actionControl(post,id,doneId) {
+    const action=this.postControl(post,id),done=doneId?this.postControl(post,doneId):null;
+    await action.or(done||action).first().waitFor({timeout:20000});
+    const ready=await action.count(),finished=done?await done.count():0;
+    if(ready+finished!==1)throw new Error('原帖操作按钮不唯一，请检查 X 页面后重试；未点击任何按钮');
+    return finished?null:action;
+  }
   async like(task) {
     await this.guard(this.x); const post=await this.targetPost(task);
-    if(await post.getByTestId('unlike').count()) return;
-    await post.getByTestId('like').click();
-    await post.getByTestId('unlike').waitFor(); this.log('已确认点赞');
+    const button=await this.actionControl(post,'like','unlike');if(!button)return;
+    await button.click();
+    await this.postControl(post,'unlike').waitFor(); this.log('已确认点赞');
   }
   async follow(task) {
     await this.guard(this.x);
@@ -167,15 +179,15 @@ export class BrowserAdapter {
   }
   async repost(task) {
     await this.guard(this.x); const post=await this.targetPost(task);
-    if(await post.getByTestId('unretweet').count()) return;
-    await post.getByTestId('retweet').click();
+    const button=await this.actionControl(post,'retweet','unretweet');if(!button)return;
+    await button.click();
     await this.x.getByTestId('retweetConfirm').click();
-    await post.getByTestId('unretweet').waitFor(); this.log('已确认转帖');
+    await this.postControl(post,'unretweet').waitFor(); this.log('已确认转帖');
   }
   async publish(task,text,onBeforeSend) {
     await this.guard(this.x);
     // Use the target post's reply button so parentage is explicit.
-    await (await this.targetPost(task)).getByTestId('reply').click();
+    await (await this.actionControl(await this.targetPost(task),'reply')).click();
     // X renders nested dialogs; select the innermost composer, not both ancestors.
     const dialog=this.x.getByRole('dialog').filter({has:this.x.getByTestId('tweetTextarea_0')}).last();
     await dialog.waitFor();
