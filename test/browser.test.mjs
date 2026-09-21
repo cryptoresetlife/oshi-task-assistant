@@ -22,6 +22,42 @@ function followPage(buttons,{load,confirm=true,url='https://x.com/mangayomucom'}
   adapter.x={url:()=>url,getByTestId:()=>new Locator()};return {adapter,clicks};
 }
 const followTask={type:'follow',url:'https://x.com/mangayomucom'};
+
+function articleControls(buttons) {
+  const clicks=[];
+  class Locator {
+    constructor(predicate){this.predicate=predicate;}
+    rows(){return buttons.filter(this.predicate);}
+    filter({visible}){return new Locator(b=>this.predicate(b)&&(!visible||b.visible!==false));}
+    or(other){return new Locator(b=>this.predicate(b)||other.predicate(b));}
+    first(){return this;}
+    async waitFor(){assert(this.rows().length>0,'expected control state');}
+    async count(){return this.rows().length;}
+    async click(){assert.equal(this.rows().length,1,'never choose arbitrary duplicate');const b=this.rows()[0];clicks.push(b.name);if(b.id==='like')b.id='unlike';if(b.id==='retweet')b.id='unretweet';}
+  }
+  const post={locator(selector){const id=selector.match(/button\[data-testid="([^"]+)"\]/)?.[1];assert(id);assert(selector.includes(':not([data-testid="twitterArticleReadView"] *)'));assert(selector.includes(':not([data-testid="quoteTweet"] *)'));return new Locator(b=>b.id===id&&!b.article&&!b.quote);}};
+  const adapter=new BrowserAdapter(()=>{},()=>{});adapter.guard=async()=>{};adapter.targetPost=async()=>post;
+  return {adapter,post,clicks};
+}
+
+test('article duplicate toolbar is excluded from likes; a second call never unlikes',async()=>{
+  const {adapter,clicks}=articleControls([{id:'like',name:'article',article:true},{id:'like',name:'outer'},{id:'like',name:'hidden',visible:false}]);
+  await adapter.like({});await adapter.like({});assert.deepEqual(clicks,['outer']);
+});
+test('article unlike state cannot masquerade as a liked outer tweet',async()=>{
+  const {adapter,clicks}=articleControls([{id:'unlike',name:'article',article:true},{id:'like',name:'outer'}]);
+  await adapter.like({});assert.deepEqual(clicks,['outer']);
+});
+test('two remaining visible outer controls stop without clicking',async()=>{
+  const {adapter,clicks}=articleControls([{id:'like',name:'outer1'},{id:'like',name:'outer2'}]);
+  await assert.rejects(adapter.like({}),/不唯一/);assert.deepEqual(clicks,[]);
+});
+test('reply and repost share the outer-control boundary, excluding quotes and article controls',async()=>{
+  for(const id of ['reply','retweet']){
+    const {adapter,post,clicks}=articleControls([{id,name:'quote',quote:true},{id,name:'article',article:true},{id,name:'outer'}]);
+    const control=await adapter.actionControl(post,id,id==='retweet'?'unretweet':undefined);await control.click();assert.deepEqual(clicks,['outer']);
+  }
+});
 test('follow waits for target and ignores recommendation buttons and handle prefixes',async()=>{
   const {adapter,clicks}=followPage([{id:'2-follow',label:'关注 @other'},{id:'3-follow',label:'Follow @mangayomucom2'}],{load:rows=>rows.push({id:'1998595899241689088-follow',label:'关注 @mangayomucom'})});
   await adapter.follow(followTask);assert.deepEqual(clicks,['1998595899241689088-follow']);
