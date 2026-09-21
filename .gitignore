@@ -1,0 +1,15 @@
+node_modules/
+data/
+Chrome/
+chrome-profile/
+profiles.json
+connections.json
+history.json
+*.log
+*.zip
+*.tmp
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
