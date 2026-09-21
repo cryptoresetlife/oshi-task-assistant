@@ -5,11 +5,14 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Engine } from './engine.mjs';
 import { LocalChrome, chromeEndpoint } from './chrome.mjs';
+import { Batch } from './batch.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
-const port=Number(process.env.OSHI_PORT||18744), host=`127.0.0.1:${port}`, origin=`http://${host}`;
+const port=Number(process.env.OSHI_PORT||18745), host=`127.0.0.1:${port}`, origin=`http://${host}`;
 const token=crypto.randomBytes(24).toString('hex');
 const engine=new Engine(process.env.OSHI_DATA_DIR||path.join(root,'data'));
+const batch=new Batch(process.env.OSHI_DATA_DIR||path.join(root,'data'),engine.journal);
+const snapshot=()=>({...engine.snapshot(),batch:batch.snapshot()});
 const config=process.env.OSHI_PROFILES_FILE||path.join(process.env.APPDATA||'', 'ChromeManager','profiles.json');
 const demo=process.env.OSHI_DEMO==='1';
 const localChrome=new LocalChrome(path.join(process.env.LOCALAPPDATA||root,'OshiTaskAssistant'));
@@ -25,7 +28,7 @@ async function profiles() {
   }));
   return [...managed,...await localChrome.profiles()];
 }
-const assets={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};
+const assets={'/':'index.html','/app.js':'app.js','/batch.js':'batch.js','/style.css':'style.css'};
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
 const server=http.createServer(async(req,res)=>{
   res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
@@ -41,13 +44,27 @@ const server=http.createServer(async(req,res)=>{
       res.setHeader('Cache-Control','no-store');return res.end(data);
     }
     if(req.headers['x-oshi-token']!==token)return json(res,403,{error:'请重新打开工具页面'});
-    if(req.method==='GET'&&url.pathname==='/api/state')return json(res,200,engine.snapshot());
+    if(req.method==='GET'&&url.pathname==='/api/state')return json(res,200,snapshot());
     if(req.method==='GET'&&url.pathname==='/api/profiles')return json(res,200,await profiles());
     if(req.method!=='POST')return json(res,404,{error:'未找到接口'});
     if(!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'仅接受 JSON'});
     let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>128000)throw new Error('请求过大');}
     const body=JSON.parse(raw||'{}');
     if(demo)throw new Error('当前为界面演示，不执行浏览器操作');
+    if(url.pathname.startsWith('/api/batch/')) {
+      if(engine.busy)throw new Error('请先停止单环境任务，再使用并行队列');
+      if(url.pathname==='/api/batch/prepare') {
+        if(!Array.isArray(body.ids)||!body.ids.length)throw new Error('请选择环境');
+        const available=await profiles();const selected=body.ids.map(id=>available.find(p=>p.id===id));
+        if(engine.busy)throw new Error('请先停止单环境任务，再使用并行队列');
+        if(selected.some(p=>!p))throw new Error('环境列表已变化，请刷新');batch.prepare(selected,body.limit);
+      } else if(url.pathname==='/api/batch/start')batch.start(body.plans,body.settings||{},body.limit);
+      else if(url.pathname==='/api/batch/stop')batch.stop(body.id);
+      else if(url.pathname==='/api/batch/approve')batch.approve(body.id,body.key,body.text);
+      else return json(res,404,{error:'未找到接口'});
+      return json(res,200,snapshot());
+    }
+    if(batch.busy)throw new Error('并行队列正在运行，请在多环境面板操作或先停止全部');
     switch(url.pathname) {
       case '/api/chrome/launch': {
         if(engine.busy)throw new Error('请先停止当前队列');
@@ -60,6 +77,7 @@ const server=http.createServer(async(req,res)=>{
       case '/api/connect': {
         const p=(await profiles()).find(p=>p.id===String(body.id));if(!p?.running)throw new Error('该环境尚未启动，请启动对应 Chrome 后刷新环境');
         if(p.source==='chrome')await chromeEndpoint(p.debugPort);
+        if(batch.busy)throw new Error('请先停止并行队列，再切换单环境');
         await engine.connect(p);break;
       }
       case '/api/scan':await engine.scan();break;
@@ -70,7 +88,7 @@ const server=http.createServer(async(req,res)=>{
       case '/api/resume':engine.resumeOnly(body.key);break;
       default:return json(res,404,{error:'未找到接口'});
     }
-    return json(res,200,engine.snapshot());
+    return json(res,200,snapshot());
   }catch(e){return json(res,400,{error:e.message});}
 });
 server.on('error',e=>{console.error(e.code==='EADDRINUSE'?`端口 ${port} 已被占用：请先关闭旧助手，或访问已运行的界面。`:e.message);process.exit(1);});

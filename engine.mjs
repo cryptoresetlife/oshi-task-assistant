@@ -44,7 +44,7 @@ export class Engine {
       this.tasks=await this.adapter.scan();return this.tasks;
     } finally{this.busy=false;}
   }
-  start(keys,settings,drafts={}) {
+  prepareRun(keys,settings,drafts={}) {
     if(this.busy || !this.profile) throw new Error('请先连接，且等待当前任务结束');
     if(!Array.isArray(keys)||!keys.length||keys.length>60) throw new Error('请选择 1–60 个任务');
     const selected=[...new Set(keys)].map(k=>this.tasks.find(t=>t.key===k));
@@ -58,6 +58,10 @@ export class Engine {
       }
     }
     settings={...settings,interval:Math.min(300,Math.max(5,Number(settings.interval)||15)),autoPublish:settings.autoPublish===true,like:settings.like===true};
+    return {selected,settings,drafts};
+  }
+  start(keys,input,drafts={}) {
+    const {selected,settings}=this.prepareRun(keys,input,drafts);
     this.busy=true;this.stopFlag=false;this.lastError=null;this.controller=new AbortController();this.status='运行中';
     this.job=this.run(selected,settings,drafts).catch(e=>{
       this.status=this.stopFlag?'已停止':'需处理';
