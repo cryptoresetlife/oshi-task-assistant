@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Engine } from './engine.mjs';
 import { LocalChrome, chromeEndpoint } from './chrome.mjs';
 import { Batch } from './batch.mjs';
+import { ExtensionBridge } from './bridge.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const port=Number(process.env.OSHI_PORT||18745), host=`127.0.0.1:${port}`, origin=`http://${host}`;
@@ -26,8 +27,9 @@ async function profiles() {
     try{const r=await fetch(`http://127.0.0.1:${p.debugPort}/json/version`,{signal:AbortSignal.timeout(1000)});const j=await r.json();running=Boolean(j.webSocketDebuggerUrl);}catch{}
     return {...p,running};
   }));
-  return [...managed,...await localChrome.profiles()];
+  return [...managed,...await localChrome.profiles(),...bridge.profiles()];
 }
+const resolveProfile=p=>p.source==='extension'?{...p,endpoint:bridge.endpoint(p.id)}:p;
 const assets={'/':'index.html','/app.js':'app.js','/batch.js':'batch.js','/style.css':'style.css'};
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
 const server=http.createServer(async(req,res)=>{
@@ -46,6 +48,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.headers['x-oshi-token']!==token)return json(res,403,{error:'请重新打开工具页面'});
     if(req.method==='GET'&&url.pathname==='/api/state')return json(res,200,snapshot());
     if(req.method==='GET'&&url.pathname==='/api/profiles')return json(res,200,await profiles());
+    if(req.method==='GET'&&url.pathname==='/api/extension/pairing')return json(res,200,{...bridge.pairing(),folder:path.join(root,'extension')});
     if(req.method!=='POST')return json(res,404,{error:'未找到接口'});
     if(!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'仅接受 JSON'});
     let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>128000)throw new Error('请求过大');}
@@ -57,7 +60,7 @@ const server=http.createServer(async(req,res)=>{
         if(!Array.isArray(body.ids)||!body.ids.length)throw new Error('请选择环境');
         const available=await profiles();const selected=body.ids.map(id=>available.find(p=>p.id===id));
         if(engine.busy)throw new Error('请先停止单环境任务，再使用并行队列');
-        if(selected.some(p=>!p))throw new Error('环境列表已变化，请刷新');batch.prepare(selected,body.limit);
+        if(selected.some(p=>!p))throw new Error('环境列表已变化，请刷新');batch.prepare(selected.map(resolveProfile),body.limit);
       } else if(url.pathname==='/api/batch/start')batch.start(body.plans,body.settings||{},body.limit);
       else if(url.pathname==='/api/batch/stop')batch.stop(body.id);
       else if(url.pathname==='/api/batch/approve')batch.approve(body.id,body.key,body.text);
@@ -78,7 +81,7 @@ const server=http.createServer(async(req,res)=>{
         const p=(await profiles()).find(p=>p.id===String(body.id));if(!p?.running)throw new Error('该环境尚未启动，请启动对应 Chrome 后刷新环境');
         if(p.source==='chrome')await chromeEndpoint(p.debugPort);
         if(batch.busy)throw new Error('请先停止并行队列，再切换单环境');
-        await engine.connect(p);break;
+        await engine.connect(resolveProfile(p));break;
       }
       case '/api/scan':await engine.scan();break;
       case '/api/start':engine.start(body.keys,body.settings||{},body.drafts||{});break;
@@ -91,5 +94,6 @@ const server=http.createServer(async(req,res)=>{
     return json(res,200,snapshot());
   }catch(e){return json(res,400,{error:e.message});}
 });
+const bridge=new ExtensionBridge(server,host);
 server.on('error',e=>{console.error(e.code==='EADDRINUSE'?`端口 ${port} 已被占用：请先关闭旧助手，或访问已运行的界面。`:e.message);process.exit(1);});
 server.listen(port,'127.0.0.1',()=>console.log(`Oshi 助手已启动：${origin}\n退出请关闭此窗口或按 Ctrl+C。支持普通 Chrome 和多开管理器环境。`));

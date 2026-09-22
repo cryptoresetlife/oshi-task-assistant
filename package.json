@@ -1,13 +1,26 @@
 {
   "name": "oshi-chrome-assistant",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Local Oshi task assistant for ordinary Chrome and compatible multi-profile Chrome environments",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/cryptoresetlife/oshi-task-assistant.git" },
-  "bugs": { "url": "https://github.com/cryptoresetlife/oshi-task-assistant/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cryptoresetlife/oshi-task-assistant.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cryptoresetlife/oshi-task-assistant/issues"
+  },
   "type": "module",
-  "engines": { "node": ">=22" },
-  "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs" },
-  "dependencies": { "playwright-core": "1.63.0" }
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0",
+    "ws": "^8.21.3"
+  }
 }

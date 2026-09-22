@@ -4,11 +4,11 @@ import { xUrl, taskType, taskKey, validateReplyUrl } from './core.mjs';
 const ROOT='https://studio.oshi-labs.com/';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export class BrowserAdapter {
-  constructor(log, check) { this.log=log; this.check=check; }
+  constructor(log, check, endpoint=null) { this.log=log; this.check=check; this.endpoint=endpoint; }
   async connect(port) {
-    if (!Number.isInteger(port) || port<1024 || port>65535) throw new Error('浏览器端口无效');
+    if (!this.endpoint&&(!Number.isInteger(port) || port<1024 || port>65535)) throw new Error('浏览器端口无效');
     if (this.browser?.isConnected() && this.port!==port) await this.release();
-    if (!this.browser?.isConnected()) this.browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`,{timeout:10000,noDefaults:true});
+    if (!this.browser?.isConnected()) this.browser=await chromium.connectOverCDP(this.endpoint||`http://127.0.0.1:${port}`,{timeout:15000,noDefaults:true});
     this.port=port; this.context=this.browser.contexts()[0];
     if (!this.context) throw new Error('没有可用的 Chrome 上下文');
     this.context.setDefaultTimeout(10000);
@@ -119,9 +119,8 @@ export class BrowserAdapter {
   async openTarget(task) {
     await this.guard(this.oshi); await this.closeDialog();
     const c=await this.card(task); if(!c) throw new Error('任务已经完成或列表已变化，请刷新');
-    const popup=this.oshi.waitForEvent('popup',{timeout:12000});
-    await c.locator('a[target="_blank"]').first().click();
-    this.x=await popup; await this.x.waitForLoadState('domcontentloaded');
+    if(this.endpoint){this.x=await this.context.newPage();await this.x.goto(task.url,{waitUntil:'domcontentloaded'});}
+    else {const popup=this.oshi.waitForEvent('popup',{timeout:12000});await c.locator('a[target="_blank"]').first().click();this.x=await popup;await this.x.waitForLoadState('domcontentloaded');}
     await this.guard(this.x);
     await this.x.getByTestId('AppTabBar_Profile_Link').waitFor({timeout:20000});
     const href=await this.x.getByTestId('AppTabBar_Profile_Link').getAttribute('href');

@@ -10,3 +10,6 @@ Windows release packages include the dependency and preserve its upstream
 Google Chrome is installed separately and is not redistributed. The original
 Chrome multi-instance manager is not included. This project is not affiliated
 with Oshi Labs, X, or Google.
+
+The local extension relay uses **ws**, published under the MIT License:
+https://github.com/websockets/ws . Its license is preserved in `node_modules/ws/LICENSE`.

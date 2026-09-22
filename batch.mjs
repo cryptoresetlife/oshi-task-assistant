@@ -16,7 +16,7 @@ export class Batch {
     if(this.busy)throw new Error('并行队列仍在运行，请先停止');
     const limit=concurrency(value);
     if(!Array.isArray(sources)||!sources.length||sources.length>30)throw new Error('请选择 1–30 个已启动环境');
-    if(sources.some(p=>!p.running)||new Set(sources.map(p=>p.id)).size!==sources.length||new Set(sources.map(p=>p.debugPort)).size!==sources.length)throw new Error('环境未启动或存在重复浏览器端口，请刷新环境后重选');
+    if(sources.some(p=>!p.running)||new Set(sources.map(p=>p.id)).size!==sources.length||new Set(sources.map(p=>p.source==='extension'?p.id:p.debugPort)).size!==sources.length)throw new Error('环境未启动或存在重复浏览器端口，请刷新环境后重选');
     const old=this.entries;this.limit=limit;this.busy=true;this.stopped=false;this.phase='正在扫描';
     this.entries=sources.map(source=>{const engine=this.makeEngine();engine.journal=this.journal;return {source,engine,stage:'等待扫描',disabled:false,error:null};});
     this.job=(async()=>{

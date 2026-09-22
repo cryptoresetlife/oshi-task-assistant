@@ -5,7 +5,7 @@ export class Engine {
   constructor(dataDir,adapterFactory) {
     this.journal=new Journal(dataDir); this.events=[]; this.tasks=[]; this.profile=null; this.busy=false; this.stopFlag=false;
     this.status='未连接'; this.current=null; this.pending=null; this.lastError=null; this.controller=new AbortController();
-    this.makeAdapter=adapterFactory||(()=>new BrowserAdapter(m=>this.log(m),()=>this.check()));
+    this.makeAdapter=adapterFactory||((profile)=>new BrowserAdapter(m=>this.log(m),()=>this.check(),profile?.endpoint));
     this.adapter=this.makeAdapter();
   }
   log(message) { this.events.push({time:new Date().toLocaleTimeString('zh-CN',{hour12:false}),message}); this.events=this.events.slice(-200); }
@@ -17,7 +17,7 @@ export class Engine {
   async connect(profile) {
     if(this.busy) throw new Error('任务正在运行');
     this.busy=true; this.stopFlag=false;
-    const previous=this.adapter,candidate=this.makeAdapter();
+    const previous=this.adapter,candidate=this.makeAdapter(profile);
     this.status=this.profile?'正在切换环境':'连接中';
     try {
       await candidate.connect(profile.debugPort);
