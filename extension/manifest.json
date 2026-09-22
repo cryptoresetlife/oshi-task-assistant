@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Oshi 助手 · 已登录 Chrome 接入",
+  "version": "0.1.7",
+  "minimum_chrome_version": "125",
+  "description": "将当前 Chrome 登录环境连接到本机 Oshi 助手。仅控制助手创建的 Oshi 与 X 工作标签页。",
+  "permissions": ["debugger", "storage", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "worker.js", "type": "module"},
+  "action": {"default_popup": "popup.html", "default_title": "连接 Oshi 助手"}
+}
