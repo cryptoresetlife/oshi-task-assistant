@@ -58,3 +58,5 @@ $('approve').onclick=()=>action(async()=>{apply(await api('approve',{key:pending
 $('export').onclick=()=>{const blob=new Blob([JSON.stringify(state.records,null,2)],{type:'application/json'}),a=node('a');a.href=URL.createObjectURL(blob);a.download='oshi-records-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
 renderMode();action(async()=>{await loadProfiles();apply(await api('state'));});
 let polling=false;setInterval(async()=>{if(polling)return;polling=true;try{apply(await api('state'));}catch(e){$('status').textContent='服务未连接';}finally{polling=false;}},1500);
+$('extension-info').onclick=()=>action(async()=>{const p=await api('extension/pairing');$('extension-folder').value=p.folder;$('extension-address').value=p.address;$('extension-code').value=p.token;$('extension-pairing').hidden=false;});
+$('extension-copy').onclick=()=>action(async()=>{await navigator.clipboard.writeText($('extension-code').value);$('extension-copy').textContent='已复制';});
