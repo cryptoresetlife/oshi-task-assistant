@@ -104,3 +104,33 @@ test('release closes only the assistant task tab and disconnects CDP, retaining 
   adapter.browser={isConnected:()=>true,close:async()=>called.push('disconnect')};adapter.account='first';adapter.expectedAccount='first';
   await adapter.release();assert.deepEqual(called,['oshi','disconnect']);assert.equal(adapter.browser,null);assert.equal(adapter.expectedAccount,null);
 });
+
+function gatedReport({enabled=false,unlock=true,completed=true,href='https://x.com/example'}={}) {
+  const steps=[],adapter=new BrowserAdapter(m=>steps.push(m),()=>{},'ws://fixture');
+  adapter.guard=async()=>{};adapter.oshi={};let reported=false;
+  const button={count:async()=>1,isEnabled:async()=>enabled,click:async()=>{assert(enabled);steps.push('report');reported=true;}};
+  const entry={count:async()=>1,getAttribute:async()=>href,click:async()=>{steps.push('entry');if(unlock)enabled=true;}};
+  const card={locator:selector=>selector==='button'?button:selector==='a[target="_blank"]'?entry:{waitFor:async()=>{if(!enabled)throw new Error('timeout');}}};
+  adapter.card=async(_task,done)=>done?(reported&&completed?{}:null):card;
+  return {adapter,steps};
+}
+
+test('extension report clicks the official entry before reporting a confirmed action',async()=>{
+  const {adapter,steps}=gatedReport();await adapter.submitSimple({type:'follow',url:'https://x.com/example'});
+  assert(steps.indexOf('entry')<steps.indexOf('report'));assert(steps.includes('report'));
+});
+
+test('enabled official report does not open another task entry',async()=>{
+  const {adapter,steps}=gatedReport({enabled:true});await adapter.submitSimple({type:'follow',url:'https://x.com/example'});
+  assert.deepEqual(steps,['report']);
+});
+
+test('extension never forces a report button that remains disabled',async()=>{
+  const {adapter,steps}=gatedReport({unlock:false});await assert.rejects(adapter.submitSimple({type:'follow',url:'https://x.com/example'}),/仍不可用/);
+  assert(!steps.includes('report'));
+});
+
+test('extension refuses a mismatching official task entry without opening it',async()=>{
+  const {adapter,steps}=gatedReport({href:'https://x.com/other'});await assert.rejects(adapter.submitSimple({type:'follow',url:'https://x.com/example'}),/不一致/);
+  assert.deepEqual(steps,[]);
+});
