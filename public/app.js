@@ -2,6 +2,9 @@ const $=id=>document.getElementById(id), token=document.querySelector('meta[name
 let state={tasks:[],events:[],records:[]},selected=new Set(),drafts={},taskSignature='',recordSignature='',pendingKey='',requestBusy=false,lastErrorSignature='';
 let availableProfiles=[];
 const draftsByAccount=new Map();
+const runtimeNote=document.createElement('small');runtimeNote.id='runtime-note';document.querySelector('.aside-bottom').append(document.createElement('br'),runtimeNote);
+const shutdownButton=document.createElement('button');shutdownButton.textContent='关闭助手服务';document.querySelector('.aside-bottom').append(document.createElement('br'),shutdownButton);
+shutdownButton.onclick=()=>action(async()=>{const result=await api('shutdown',{});runtimeNote.textContent=result.message;shutdownButton.disabled=true;});
 const profileScope=p=>p?`${p.id}:${p.account}`:'';
 const labels={reply:'评论',follow:'关注',like:'点赞',repost:'转帖',manual:'手动任务'};
 const stages={prepared:'回复已准备',posting:'需核对发布结果',uncertain:'需核对发布结果',posted:'已有回复链接',acted:'操作已完成',done:'已提交完成'};
@@ -28,7 +31,7 @@ function renderTasks(){
     head.append(check,body);item.append(head);list.append(item);
   }updateSelection();
 }
-function connectionControls(){const occupied=state.busy||state.batch?.busy;for(const id of ['launch-chrome','add-chrome','chrome-port'])$(id).disabled=occupied||requestBusy;const differs=state.profile&&$('profile').value!==state.profile.id;$('profile').disabled=occupied;$('profiles').disabled=occupied;$('connect').textContent=state.profile?'切换环境':'连接环境';$('connect').disabled=occupied||!$('profile').value||Boolean(state.profile&&!differs);$('scan').disabled=!state.profile||occupied||Boolean(differs);}
+function connectionControls(){const occupied=state.busy||state.batch?.busy;for(const id of ['launch-chrome','add-chrome','chrome-port'])$(id).disabled=occupied||requestBusy;const differs=state.profile&&$('profile').value!==state.profile.id;$('profile').disabled=occupied;$('profiles').disabled=occupied;$('connect').textContent=state.profile?(differs?'切换环境':'重新连接环境'):'连接环境';$('connect').disabled=occupied||requestBusy||!$('profile').value;$('scan').disabled=!state.profile||occupied||Boolean(differs);}
 function updateSelection(){for(const k of selected)if(!state.tasks.some(t=>t.key===k))selected.delete(k);$('selected-count').textContent=`已选 ${selected.size} 项`;$('start').disabled=!state.profile||state.busy||state.batch?.busy||!selected.size||$('profile').value!==state.profile.id;const eligible=state.tasks.filter(t=>t.type!=='manual');$('select-all').checked=eligible.length>0&&eligible.every(t=>selected.has(t.key));}
 $('profile').addEventListener('change',()=>{connectionControls();updateSelection();});
 $('select-all').addEventListener('change',()=>{selected=$('select-all').checked?new Set(state.tasks.filter(t=>t.type!=='manual').map(t=>t.key)):new Set();taskSignature='';renderTasks();});
@@ -39,6 +42,8 @@ function renderRecords(){const sig=JSON.stringify(state.records);if(sig===record
   if(['posting','uncertain','posted','prepared'].includes(r.stage)){const recovery=node('div',undefined,'recovery'),input=node('input'),btn=node('button','补填链接');input.placeholder='粘贴自己的真实回复链接';input.setAttribute('aria-label','补填 '+r.title+' 回复链接');btn.disabled=state.busy||state.batch?.busy;btn.onclick=()=>action(async()=>apply(await api('recover',{key:r.task,url:input.value})));recovery.append(input,btn);result.append(recovery);}row.append(status,detail,result);records.append(row);}
 }
 function apply(s){const changedBusy=state.busy!==s.busy||state.batch?.busy!==s.batch?.busy;
+  runtimeNote.textContent=s.runtime?`后台 v${s.runtime.version}${s.runtime.updateAvailable?' · 修复待重启生效':''}`:'后台版本未知，请重启助手服务';
+  shutdownButton.disabled=s.busy||s.batch?.busy||!s.runtime;
   const before=profileScope(state.profile),after=profileScope(s.profile);
   if(before!==after){if(before)draftsByAccount.set(before,{...drafts});drafts={...(draftsByAccount.get(after)||{})};selected.clear();taskSignature='';recordSignature='';pendingKey='';if(s.profile)$('profile').value=s.profile.id;}
   state=s;$('status').textContent=s.status;$('account').textContent=s.profile?`当前连接：${s.profile.name} · @${s.profile.account}`:'尚未连接';connectionControls();$('stop').disabled=!s.busy;$('select-all').disabled=s.busy||s.batch?.busy;document.querySelectorAll('.settings input,.settings textarea').forEach(e=>e.disabled=s.busy||s.batch?.busy);if(changedBusy){taskSignature='';recordSignature='';}renderTasks();renderRecords();updateSelection();document.querySelectorAll('.task-item').forEach(e=>e.classList.toggle('current',e.dataset.key===s.current));
