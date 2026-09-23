@@ -10,7 +10,7 @@ const labels={reply:'评论',follow:'关注',like:'点赞',repost:'转帖',manua
 const stages={prepared:'回复已准备',posting:'需核对发布结果',uncertain:'需核对发布结果',posted:'已有回复链接',acted:'操作已完成',done:'已提交完成'};
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
 function showError(error){$('error').textContent=error?.message||String(error);$('error').hidden=false;}
-async function api(route,body){const response=await fetch('/api/'+route,{method:body===undefined?'GET':'POST',headers:{'X-Oshi-Token':token,...(body!==undefined?{'Content-Type':'application/json'}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'请求失败');return data;}
+async function api(route,body){const response=await fetch('/api/'+route,{method:body===undefined?'GET':'POST',headers:{'X-Oshi-Token':token,...(body!==undefined?{'Content-Type':'application/json'}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{}),...(route==='state'?{signal:AbortSignal.timeout(10000)}:{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'请求失败');return data;}
 async function action(fn){if(requestBusy)return;requestBusy=true;connectionControls();if(typeof renderBatch==='function')renderBatch();$('error').hidden=true;try{await fn();}catch(e){showError(e);}finally{requestBusy=false;connectionControls();if(typeof renderBatch==='function')renderBatch();}}
 function mode(){return document.querySelector('input[name=mode]:checked').value;}
 function settings(){return {mode:mode(),text:$('template').value,endpoint:$('endpoint').value,model:$('model').value,apiKey:$('api-key').value,instructions:$('instructions').value,like:$('like').checked,autoPublish:$('auto-publish').checked,interval:Number($('interval').value)};}
@@ -62,6 +62,20 @@ $('stop').onclick=()=>action(async()=>{apply(await api('stop',{}));});
 $('approve').onclick=()=>action(async()=>{apply(await api('approve',{key:pendingKey,text:$('review-text').value}));});
 $('export').onclick=()=>{const blob=new Blob([JSON.stringify(state.records,null,2)],{type:'application/json'}),a=node('a');a.href=URL.createObjectURL(blob);a.download='oshi-records-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
 renderMode();action(async()=>{await loadProfiles();apply(await api('state'));});
-let polling=false;setInterval(async()=>{if(polling)return;polling=true;try{apply(await api('state'));}catch(e){$('status').textContent='服务未连接';}finally{polling=false;}},1500);
+const disconnectedControls=new Map();let disconnectedMessage='';
+function serviceReconnected() {
+  for(const [el,disabled]of disconnectedControls)el.disabled=disabled;
+  disconnectedControls.clear();
+  if(disconnectedMessage&&$('error').textContent===disconnectedMessage)$('error').hidden=true;
+  disconnectedMessage='';
+}
+function serviceDisconnected() {
+  const message='与助手服务失去连接，进度已停止更新。请重新启动助手并刷新页面；已保存的回复链接会保留。';
+  disconnectedMessage=message;$('status').textContent='服务未连接';runtimeNote.textContent='后台连接中断';showError(message);
+  $('batch-status').textContent='服务未连接，以下为最后收到的进度';
+  if(typeof batchCards!=='undefined')for(const card of batchCards.values())card.status.textContent='状态未知 · 服务连接中断';
+  for(const el of document.querySelectorAll('button,input,textarea,select')){if(!disconnectedControls.has(el))disconnectedControls.set(el,el.disabled);el.disabled=true;}
+}
+let polling=false;setInterval(async()=>{if(polling)return;polling=true;try{const next=await api('state');serviceReconnected();apply(next);}catch(e){serviceDisconnected();}finally{polling=false;}},1500);
 $('extension-info').onclick=()=>action(async()=>{const p=await api('extension/pairing');$('extension-folder').value=p.folder;$('extension-address').value=p.address;$('extension-code').value=p.token;$('extension-pairing').hidden=false;});
 $('extension-copy').onclick=()=>action(async()=>{await navigator.clipboard.writeText($('extension-code').value);$('extension-copy').textContent='已复制';});
