@@ -130,7 +130,19 @@ export class BrowserAdapter {
     await this.guard(this.oshi); await this.closeDialog();
     const c=await this.card(task); if(!c) throw new Error('任务已经完成或列表已变化，请刷新');
     if(this.endpoint){this.x=await this.context.newPage();await this.navigate(this.x,task.url);}
-    else {const popup=this.oshi.waitForEvent('popup',{timeout:12000});await c.locator('a[target="_blank"]').first().click();this.x=await popup;await this.x.waitForLoadState('domcontentloaded');}
+    else {
+      // Observe both promises immediately: a popup timeout used to reject while
+      // click was still pending, terminating Node before the queue could catch it.
+      // Wait for both to settle so a late click cannot spill into the next task.
+      const [popup,click]=await Promise.allSettled([
+        this.oshi.waitForEvent('popup',{timeout:30000}),
+        c.locator('a[target="_blank"]').first().click({timeout:30000})
+      ]);
+      if(popup.status==='fulfilled')this.x=popup.value;
+      if(click.status==='rejected')throw click.reason;
+      if(popup.status==='rejected')throw popup.reason;
+      await this.x.waitForLoadState('domcontentloaded',{timeout:45000});
+    }
     await this.guard(this.x);
     await this.x.getByTestId('AppTabBar_Profile_Link').waitFor({timeout:20000});
     const href=await this.x.getByTestId('AppTabBar_Profile_Link').getAttribute('href');
