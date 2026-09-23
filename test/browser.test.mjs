@@ -23,6 +23,39 @@ function followPage(buttons,{load,confirm=true,url='https://x.com/mangayomucom'}
 }
 const followTask={type:'follow',url:'https://x.com/mangayomucom'};
 
+function popupAdapter(wait,click) {
+  const adapter=new BrowserAdapter(()=>{},()=>{});
+  adapter.guard=async()=>{};adapter.closeDialog=async()=>{};
+  adapter.oshi={waitForEvent:wait};
+  adapter.card=async()=>({locator:()=>({first:()=>({click})})});
+  return adapter;
+}
+test('popup timeout before slow click settles is handled without an unhandled rejection',async()=>{
+  let clicked=false;
+  const timeout=Object.assign(Error('popup timeout'),{name:'TimeoutError'});
+  const adapter=popupAdapter(()=>Promise.reject(timeout),async()=>{await new Promise(r=>setTimeout(r,30));clicked=true;});
+  await assert.rejects(adapter.openTarget(followTask),e=>e===timeout);
+  assert.equal(clicked,true);
+});
+test('failed click still observes the later popup rejection',async()=>{
+  const clickError=Error('click failed');let settled=false;
+  const adapter=popupAdapter(async()=>{await new Promise(r=>setTimeout(r,30));settled=true;throw Error('popup timeout');},async()=>{throw clickError;});
+  await assert.rejects(adapter.openTarget(followTask),e=>e===clickError);
+  assert.equal(settled,true);
+});
+test('popup opened during a failed click remains tracked for cleanup',async()=>{
+  let closed=false;
+  const popup={isClosed:()=>false,close:async()=>{closed=true;}};
+  const adapter=popupAdapter(async()=>popup,async()=>{throw Error('click failed');});
+  await assert.rejects(adapter.openTarget(followTask),/click failed/);
+  assert.equal(adapter.x,popup);await adapter.cleanupTarget();assert.equal(closed,true);
+});
+test('successful popup verifies destination and account normally',async()=>{
+  const popup={waitForLoadState:async()=>{},url:()=>followTask.url,getByTestId:()=>({waitFor:async()=>{},getAttribute:async()=>'/example'})};
+  const adapter=popupAdapter(async()=>popup,async()=>{});
+  assert.equal(await adapter.openTarget(followTask),'example');
+});
+
 test('read-only navigation retries once on timeout and respects cancellation',async()=>{
   const adapter=new BrowserAdapter(()=>{},()=>{});let attempts=0;
   await adapter.navigate({goto:async(_url,{timeout})=>{assert.equal(timeout,45000);if(++attempts===1)throw Object.assign(Error('slow'),{name:'TimeoutError'});}},'https://x.com/example');
