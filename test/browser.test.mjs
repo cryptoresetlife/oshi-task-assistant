@@ -23,6 +23,64 @@ function followPage(buttons,{load,confirm=true,url='https://x.com/mangayomucom'}
 }
 const followTask={type:'follow',url:'https://x.com/mangayomucom'};
 
+test('read-only navigation retries once on timeout and respects cancellation',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{});let attempts=0;
+  await adapter.navigate({goto:async(_url,{timeout})=>{assert.equal(timeout,45000);if(++attempts===1)throw Object.assign(Error('slow'),{name:'TimeoutError'});}},'https://x.com/example');
+  assert.equal(attempts,2);
+  adapter.check=()=>{throw Error('stopped');};
+  await assert.rejects(adapter.navigate({goto:async()=>attempts++},'https://x.com/example'),/stopped/);assert.equal(attempts,2);
+});
+
+test('a timed-out like that succeeded is not clicked a second time',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{});let liked=false,clicks=0;
+  adapter.guard=async()=>{};adapter.targetPost=async()=>({});
+  adapter.actionControl=async()=>liked?null:{click:async()=>{clicks++;liked=true;throw Object.assign(Error('timeout'),{name:'TimeoutError'});}};
+  await adapter.like({});assert.equal(clicks,1);
+});
+test('a timed-out like is retried once only after rechecking its state',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{});let liked=false,clicks=0,reads=0;
+  adapter.guard=async()=>{};adapter.targetPost=async()=>({});
+  adapter.actionControl=async()=>{reads++;return liked?null:{click:async({timeout})=>{assert.equal(timeout,30000);clicks++;if(clicks===1)throw Object.assign(Error('timeout'),{name:'TimeoutError'});liked=true;}};};
+  adapter.postControl=()=>({waitFor:async()=>assert(liked)});
+  await adapter.like({});assert.equal(clicks,2);assert(reads>=3);
+});
+test('like does not retry non-timeout errors or endlessly retry timeouts',async()=>{
+  for(const name of ['Error','TimeoutError']) {
+    const adapter=new BrowserAdapter(()=>{},()=>{});let clicks=0;
+    adapter.guard=async()=>{};adapter.targetPost=async()=>({});
+    adapter.actionControl=async()=>({click:async()=>{clicks++;throw Object.assign(Error('failure'),{name});}});
+    await assert.rejects(adapter.like({}),name==='TimeoutError'?/点赞操作等待超时/:/failure/);
+    assert.equal(clicks,name==='TimeoutError'?2:1);
+  }
+});
+function conversation(read) {
+  return {locator:()=>({evaluateAll:async fn=>fn(read().map(([href,quoted=false])=>{
+    const article={textContent:href==='unavailable'?'这个帖子不可用。了解更多':''};
+    article.querySelectorAll=()=>href==='unavailable'?[]:[{getAttribute:()=>href,closest:selector=>selector.startsWith('article')?article:quoted?{}:null}];return article;
+  }))})};
+}
+test('reply verification waits for delayed ancestors without any publication',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{});let reads=0;
+  const page=conversation(()=>++reads===1?[['/author/status/200']]:[['/parent/status/100'],['/author/status/200']]);
+  await adapter.waitForReplyParent(page,'200','100',{timeout:100,interval:1});assert.equal(reads,2);
+});
+test('reply verification rejects missing and wrong parents, and quoted-parent timestamps',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{});
+  for(const rows of [
+    [['/author/status/200']],
+    [['/other/status/300'],['/author/status/200']],
+    [['/other/status/300'],['/parent/status/100',true],['/author/status/200']]
+  ])await assert.rejects(adapter.waitForReplyParent(conversation(()=>rows),'200','100',{timeout:0}),/仍无法确认/);
+});
+test('reply relationship polling respects stop requests',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{throw Error('stopped');});
+  await assert.rejects(adapter.waitForReplyParent(conversation(()=>[]),'200','100'),/stopped/);
+});
+test('an unavailable direct parent is reported explicitly and never accepted',async()=>{
+  const adapter=new BrowserAdapter(()=>{},()=>{});
+  await assert.rejects(adapter.waitForReplyParent(conversation(()=>[['unavailable'],['/author/status/200']]),'200','100',{timeout:0}),e=>e.code==='TASK_NEEDS_ATTENTION'&&/原帖在 X 显示不可用/.test(e.message));
+});
+
 function articleControls(buttons) {
   const clicks=[];
   class Locator {

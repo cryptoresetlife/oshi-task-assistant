@@ -15,6 +15,33 @@ function fixture(t){
   return {engine,task,counts,key:journalKey('1','me',task)};
 }
 const settings={mode:'manual',text:'A specific reply',autoPublish:true,like:true};
+
+test('a saved reply with unconfirmed parent is retained while unrelated tasks continue',async t=>{
+  const {engine,task,counts,key}=fixture(t);
+  const other={...task,url:'https://x.com/oshi/status/101'};other.key=taskKey(other);engine.tasks.push(other);
+  engine.adapter.verifyReply=async current=>{if(current===task)throw Object.assign(Error('parent not loaded'),{code:'TASK_NEEDS_ATTENTION'});};
+  engine.adapter.scan=async()=>[task];
+  await engine.run([task,other],{...settings,interval:0},{});
+  assert.equal(engine.journal.get(key).stage,'posted');assert.equal(engine.journal.get(key).error,'parent not loaded');
+  assert.equal(engine.journal.get(journalKey('1','me',other)).stage,'done');assert.equal(counts.post,2);assert.equal(counts.submit,1);
+  assert.equal(engine.status,'需处理');assert.match(engine.lastError.message,/1 项需检查/);
+  engine.adapter.verifyReply=async()=>{};engine.adapter.scan=async()=>[];
+  engine.resumeOnly(task.key);await engine.job;assert.equal(counts.post,2);assert.equal(counts.submit,2);
+});
+test('three consecutive task timeouts stop the environment before the fourth task',async t=>{
+  const {engine,task,counts}=fixture(t);
+  const tasks=Array.from({length:4},(_,i)=>{const taskCopy={...task,url:`https://x.com/oshi/status/${100+i}`};taskCopy.key=taskKey(taskCopy);return taskCopy;});engine.tasks=tasks;
+  let opened=0;engine.adapter.openTarget=async()=>{opened++;throw Object.assign(Error('slow page'),{name:'TimeoutError'});};
+  await assert.rejects(engine.run(tasks,{...settings,interval:0},{}),/连续 3 项/);
+  assert.equal(opened,3);assert.equal(counts.post,0);
+});
+test('a timeout after beginning publication stops the entire environment without retry',async t=>{
+  const {engine,task,counts,key}=fixture(t);
+  const other={...task,url:'https://x.com/oshi/status/101'};other.key=taskKey(other);engine.tasks.push(other);
+  engine.adapter.publish=async(_task,_text,before)=>{await before();counts.post++;throw Object.assign(Error('send response lost'),{name:'TimeoutError'});};
+  await assert.rejects(engine.run([task,other],{...settings,interval:0},{}),/send response lost/);
+  assert.equal(counts.post,1);assert.equal(engine.journal.get(key).stage,'posting');
+});
 test('successful queue journals real reply and completion in order',async t=>{
   const {engine,task,counts,key}=fixture(t);engine.start([task.key],settings);await engine.job;
   assert.equal(engine.status,'队列完成');assert.deepEqual(counts,{post:1,submit:1,like:1});assert.equal(engine.journal.get(key).stage,'done');assert.equal(engine.journal.get(key).replyUrl,'https://x.com/me/status/200');
