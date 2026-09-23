@@ -1,6 +1,6 @@
 {
   "name": "oshi-chrome-assistant",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "Local Oshi task assistant for ordinary Chrome and compatible multi-profile Chrome environments",
   "license": "MIT",

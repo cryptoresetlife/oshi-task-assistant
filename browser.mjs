@@ -250,7 +250,21 @@ export class BrowserAdapter {
     await this.guard(this.oshi); const c=await this.card(task);
     if(!c) { if(await this.card(task,true)) return; throw new Error('任务卡片丢失'); }
     const button=c.locator('button');
-    if(await button.count()!==1 || !await button.isEnabled()) throw new Error('任务完成按钮尚不可用，请检查页面');
+    if(await button.count()!==1) throw new Error('任务完成按钮不唯一，请检查页面');
+    if(!await button.isEnabled() && this.endpoint) {
+      // Extension work tabs open X directly, so Oshi has not received its link
+      // click. Use the real task entry to satisfy the site's prerequisite; do
+      // not force-enable the report button or assume that a click means success.
+      const entry=c.locator('a[target="_blank"]');
+      if(await entry.count()!==1) throw new Error('任务入口不唯一，请检查页面');
+      const href=await entry.getAttribute('href');
+      if(xUrl(new URL(href,ROOT).href).url.toLowerCase()!==task.url.toLowerCase())throw new Error('任务入口与目标账号不一致');
+      this.log('正在打开官网任务入口，等待完成按钮可用');
+      await entry.click();
+      await this.guard(this.oshi);
+      await c.locator('button:not([disabled])').waitFor({state:'visible',timeout:10000}).catch(()=>{throw new Error('已打开官网任务入口，但完成按钮仍不可用，请检查官网提示');});
+    }
+    if(!await button.isEnabled()) throw new Error('任务完成按钮尚不可用，请检查页面');
     await button.click();
     for(let i=0;i<30;i++) {this.check();if(await this.card(task,true))return;await sleep(500);}
     throw new Error('操作已完成，但尚未确认 Oshi 记分，请刷新检查');
