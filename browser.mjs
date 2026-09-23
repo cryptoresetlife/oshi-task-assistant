@@ -3,6 +3,7 @@ import { xUrl, taskType, taskKey, validateReplyUrl } from './core.mjs';
 
 const ROOT='https://studio.oshi-labs.com/';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const taskIssue=message=>Object.assign(new Error(message),{code:'TASK_NEEDS_ATTENTION'});
 export class BrowserAdapter {
   constructor(log, check, endpoint=null) { this.log=log; this.check=check; this.endpoint=endpoint; }
   async connect(port) {
@@ -11,10 +12,19 @@ export class BrowserAdapter {
     if (!this.browser?.isConnected()) this.browser=await chromium.connectOverCDP(this.endpoint||`http://127.0.0.1:${port}`,{timeout:15000,noDefaults:true});
     this.port=port; this.context=this.browser.contexts()[0];
     if (!this.context) throw new Error('没有可用的 Chrome 上下文');
-    this.context.setDefaultTimeout(10000);
+    this.context.setDefaultTimeout(30000);
+    this.context.setDefaultNavigationTimeout(45000);
     this.oshi = await this.context.newPage();
-    await this.oshi.goto(ROOT+'?tab=tasks',{waitUntil:'domcontentloaded'});
+    await this.navigate(this.oshi,ROOT+'?tab=tasks');
     await this.waitForTasks();
+  }
+  async navigate(page,url) {
+    // Retrying navigation is read-only. No social action is replayed here.
+    for(let attempt=0;attempt<2;attempt++) {
+      this.check();
+      try{return await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});}
+      catch(e){if(e.name!=='TimeoutError'||attempt===1)throw e;this.check();this.log('页面加载较慢，正在重新加载一次');}
+    }
   }
   async release() {
     // Only our Oshi work tab is closed. Leave X tabs for inspection/recovery.
@@ -66,7 +76,7 @@ export class BrowserAdapter {
   async oshiAccount() {
     const p=await this.context.newPage();
     try {
-      await p.goto(ROOT+'?tab=account',{waitUntil:'domcontentloaded'});
+      await this.navigate(p,ROOT+'?tab=account');
       await p.locator('#oshi-main').waitFor();
       for(let i=0;i<30;i++) {
         this.check();
@@ -119,7 +129,7 @@ export class BrowserAdapter {
   async openTarget(task) {
     await this.guard(this.oshi); await this.closeDialog();
     const c=await this.card(task); if(!c) throw new Error('任务已经完成或列表已变化，请刷新');
-    if(this.endpoint){this.x=await this.context.newPage();await this.x.goto(task.url,{waitUntil:'domcontentloaded'});}
+    if(this.endpoint){this.x=await this.context.newPage();await this.navigate(this.x,task.url);}
     else {const popup=this.oshi.waitForEvent('popup',{timeout:12000});await c.locator('a[target="_blank"]').first().click();this.x=await popup;await this.x.waitForLoadState('domcontentloaded');}
     await this.guard(this.x);
     await this.x.getByTestId('AppTabBar_Profile_Link').waitFor({timeout:20000});
@@ -151,10 +161,23 @@ export class BrowserAdapter {
     return finished?null:action;
   }
   async like(task) {
-    await this.guard(this.x); const post=await this.targetPost(task);
-    const button=await this.actionControl(post,'like','unlike');if(!button)return;
-    await button.click();
-    await this.postControl(post,'unlike').waitFor(); this.log('已确认点赞');
+    for(let attempt=0;attempt<2;attempt++) {
+      await this.guard(this.x); const post=await this.targetPost(task);
+      // A timed-out click may have reached X. Re-read the state before retrying;
+      // only a unique Like control may be clicked, never an Unlike control.
+      const button=await this.actionControl(post,'like','unlike');if(!button)return;
+      try {
+        await button.click({timeout:30000});
+        await this.postControl(post,'unlike').waitFor({timeout:30000});
+        this.log('已确认点赞');return;
+      } catch(e) {
+        if(e.name!=='TimeoutError')throw e;
+        await this.guard(this.x);
+        if(!await this.actionControl(await this.targetPost(task),'like','unlike')){this.log('已确认点赞');return;}
+        if(attempt===1)throw taskIssue('点赞操作等待超时，尚未确认成功；请检查 X 页面，重试前会先读取点赞状态');
+        this.log('点赞等待超时，已重新检查状态，正在重试一次');
+      }
+    }
   }
   async follow(task) {
     await this.guard(this.x);
@@ -186,10 +209,10 @@ export class BrowserAdapter {
   async publish(task,text,onBeforeSend) {
     await this.guard(this.x);
     // Use the target post's reply button so parentage is explicit.
-    await (await this.actionControl(await this.targetPost(task),'reply')).click();
+    await (await this.actionControl(await this.targetPost(task),'reply')).click({timeout:30000});
     // X renders nested dialogs; select the innermost composer, not both ancestors.
     const dialog=this.x.getByRole('dialog').filter({has:this.x.getByTestId('tweetTextarea_0')}).last();
-    await dialog.waitFor();
+    await dialog.waitFor({timeout:30000}).catch(e=>{if(e.name!=='TimeoutError')throw e;throw taskIssue('回复框在 30 秒内未打开，尚未发送回复；请检查 X 页面后重试');});
     await dialog.getByTestId('tweetTextarea_0').fill(text);
     const existing=new Set(await this.x.locator('a[href*="/status/"]').evaluateAll(els=>els.map(a=>a.href.split('?')[0])));
     await this.guard(this.x); await onBeforeSend();
@@ -216,18 +239,34 @@ export class BrowserAdapter {
     url=validateReplyUrl(url,account,task.url);
     const page=await this.context.newPage();
     try {
-      await page.goto(url,{waitUntil:'domcontentloaded'}); await this.guard(page);
+      await this.navigate(page,url); await this.guard(page);
       const id=xUrl(url,true).id, parent=xUrl(task.url,true).id;
       const reply=page.locator('article[data-testid="tweet"]').filter({has:page.locator(`a[href$="/status/${id}"] time`)});
       await reply.waitFor({timeout:20000});
       const body=await reply.getByTestId('tweetText').innerText();
       if(text && body.trim()!==text.trim()) throw new Error('回复内容与记录不一致，请人工检查');
       // X's reply permalink displays the direct parent above the reply.
-      const posts=await page.locator('article[data-testid="tweet"] a:has(time)').evaluateAll(els=>els.map(e=>e.getAttribute('href')));
-      const ri=posts.findIndex(p=>p?.endsWith(`/status/${id}`));
-      if(ri<1 || !posts[ri-1]?.endsWith(`/status/${parent}`)) throw new Error('无法确认回复属于目标原帖，已停止提交，请人工检查对话关系');
+      await this.waitForReplyParent(page,id,parent);
       return url;
     } finally { await page.close().catch(()=>{}); }
+  }
+  async waitForReplyParent(page,id,parent,{timeout=20000,interval=500}={}) {
+    const deadline=Date.now()+timeout;
+    do {
+      this.check();
+      // Newly published replies can render before their conversation ancestors.
+      // Read only; do not publish again or accept an unrelated/quoted timestamp.
+      const posts=await page.locator('article[data-testid="tweet"]').evaluateAll(els=>els.map(el=>{
+        const links=[...el.querySelectorAll('a:has(time)')].filter(e=>e.closest('article[data-testid="tweet"]')===el&&!e.closest('[data-testid="quoteTweet"], [data-testid="twitterArticleReadView"]'));
+        return {href:links.length===1?links[0].getAttribute('href')?.split('?')[0]:null,unavailable:!links.length&&/这个帖子不可用|此帖子不可用|this post is unavailable|this tweet is unavailable|このポストは表示できません|このポストは利用できません/i.test(el.textContent||'')};
+      }));
+      const ri=posts.findIndex(p=>p.href?.endsWith(`/status/${id}`));
+      if(ri>0&&posts[ri-1].href?.endsWith(`/status/${parent}`))return;
+      if(ri>0&&posts[ri-1].unavailable)throw taskIssue('回复上方的原帖在 X 显示不可用，无法确认对话关系；回复链接已保留，原帖恢复可见后可只续交链接');
+      if(Date.now()>=deadline)break;
+      await sleep(Math.min(interval,Math.max(0,deadline-Date.now())));
+    } while(Date.now()<=deadline);
+    throw taskIssue('等待对话加载后仍无法确认回复属于目标原帖；链接已保留，请检查对话关系后只续交链接');
   }
   async completed(task) { await this.closeDialog(); return Boolean(await this.card(task,true)); }
   async submitReply(task,url,account) {

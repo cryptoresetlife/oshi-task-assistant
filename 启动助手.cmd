@@ -22,6 +22,5 @@ if not exist "node_modules\playwright-core\package.json" (
     exit /b 1
   )
 )
-start "" "http://127.0.0.1:18745"
-node server.mjs
+node launcher.mjs
 pause

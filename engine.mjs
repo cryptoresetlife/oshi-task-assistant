@@ -74,9 +74,11 @@ export class Engine {
       .finally(()=>{this.busy=false;this.pending=null;this.current=null;this.resolvePending=null;settings.apiKey='';});
   }
   async run(tasks,settings,drafts) {
+    const deferred=[];let consecutiveFailures=0;
     for(const task of tasks) {
       this.check(); this.current=task.key; this.log(`处理 ${task.title} · ${task.url}`);
       const key=journalKey(this.profile.id,this.profile.account,task);
+      try {
       let record=this.journal.get(key);
       if(await this.adapter.completed(task)) {this.save(key,task,{stage:'done',error:null});this.tasks=this.tasks.filter(t=>t.key!==task.key);this.log('网站已标记完成，跳过');continue;}
       if(nextAction(record)==='skip') {this.tasks=this.tasks.filter(t=>t.key!==task.key);this.log('本地记录已完成，跳过');continue;}
@@ -110,10 +112,26 @@ export class Engine {
       }
       this.save(key,task,{stage:'done',error:null}); this.log('已确认 Oshi 任务完成');
       this.tasks=this.tasks.filter(t=>t.key!==task.key);
+      consecutiveFailures=0;
       await this.adapter.cleanupTarget();
+      } catch(e) {
+        this.check();
+        const saved=this.journal.get(key);
+        // Only known task-local failures may be deferred. An uncertain send,
+        // account mismatch, login challenge, or lost browser still stops work.
+        const recoverable=e.code==='TASK_NEEDS_ATTENTION'||e.name==='TimeoutError';
+        if(!recoverable||['posting','uncertain'].includes(saved.stage))throw e;
+        const detail=e.message.replace(/\u001b\[[0-9;]*m/g,'');
+        this.save(key,task,{error:detail});deferred.push(task.key);consecutiveFailures++;
+        this.log(`此任务留待处理，继续其他任务：${detail.split('\n')[0]}`);
+        await this.adapter.cleanupTarget();
+        if(consecutiveFailures>=3)throw new Error('连续 3 项任务失败，已暂停此环境，请检查页面和网络；已发布链接均已保留');
+      }
       if(task!==tasks[tasks.length-1]) for(let i=0;i<settings.interval*4;i++){this.check();await new Promise(r=>setTimeout(r,250));}
     }
-    this.tasks=await this.adapter.scan();this.status='队列完成';this.log('所选任务处理结束');
+    this.tasks=await this.adapter.scan();
+    if(deferred.length){this.status='需处理';this.lastError={task:deferred[0],message:`本轮其余任务已处理，${deferred.length} 项需检查。请展开执行记录查看原因；有回复链接的任务只续交链接。`};this.log(this.lastError.message);}
+    else{this.status='队列完成';this.log('所选任务处理结束');}
   }
   save(key,task,changes) {return this.journal.set(key,{profile:this.profile.id,account:this.profile.account,task:task.key,type:task.type,title:task.title,target:task.url,...changes});}
   resumeOnly(taskKey) {
